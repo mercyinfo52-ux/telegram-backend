@@ -1,55 +1,68 @@
 const express = require('express');
 const cors = require('cors');
-const { TelegramClient } = require('telegram');
+const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 
 const app = express();
-app.use(cors());
+const PORT = process.env.PORT || 3000;
+
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 const apiId = 23049703;
 const apiHash = 'e9c00af578a9de0253ef02337460498f';
-const client = new TelegramClient(new StringSession(""), apiId, apiHash, { connectionRetries: 5 });
-
-// Speicher für den Login-Zustand während der Sitzung
-let phoneCodeHash = "";
+const activeSessions = new Map();
 
 app.post('/send-otp', async (req, res) => {
     try {
         const { phone } = req.body;
+        const client = new TelegramClient(new StringSession(""), apiId, apiHash, { connectionRetries: 5 });
         await client.connect();
+        
         const result = await client.sendCode({ apiId, apiHash }, phone);
-        phoneCodeHash = result.phoneCodeHash;
-        res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
-    } catch (err) {
-        console.error(err);
-        res.status(400).json({ error: err.message });
+        activeSessions.set(phone, { client, phoneCodeHash: result.phoneCodeHash });
+        res.json({ phoneCodeHash: result.phoneCodeHash });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
     }
 });
 
 app.post('/verify-otp', async (req, res) => {
     try {
-        const { phone, code } = req.body;
-        
-        // Anmeldung durchführen
-        const result = await client.signIn({
-            apiId,
-            apiHash
-        }, phone, {
-            phoneCode: code,
-            phoneCodeHash: phoneCodeHash
-        });
+        const { phone, code, phoneCodeHash, password } = req.body;
+        const session = activeSessions.get(phone);
+        if (!session) return res.status(400).json({ error: "Session abgelaufen" });
 
-        // Session extrahieren
-        const session = client.session.save();
-        res.json({ success: true, session: session });
-    } catch (err) {
-        console.error(err);
-        res.status(400).json({ error: err.message });
+        try {
+            // Erstversuch: OTP Verifizierung
+            await session.client.invoke(new Api.auth.SignIn({
+                phoneNumber: phone,
+                phoneCode: code,
+                phoneCodeHash: phoneCodeHash
+            }));
+            res.json({ success: true });
+        } catch (err) {
+            // Prüfen, ob 2FA Passwort benötigt wird
+            if (err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
+                if (!password) {
+                    // Frontend muss jetzt Passwort abfragen
+                    return res.json({ twoFactorRequired: true });
+                }
+                
+                // Passwort verifizieren mittels SRP
+                const pwd = await session.client.invoke(new Api.account.GetPassword());
+                await session.client.invoke(new Api.auth.CheckPassword({
+                    password: await session.client.srpSolve(pwd, password)
+                }));
+                
+                res.json({ success: true });
+            } else {
+                throw err;
+            }
+        }
+    } catch (e) {
+        res.status(400).json({ error: e.message });
     }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server läuft auf Port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server läuft auf Port ${PORT}`));
