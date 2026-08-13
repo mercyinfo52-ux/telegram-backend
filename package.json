@@ -9,6 +9,7 @@
     "express": "^4.19.2",
     "cors": "^2.8.5",
     "telegram": "^2.26.21",
-    "mongoose": "^8.3.0"
+    "input": "^1.0.1",
+    "mongoose": "^8.2.0"
   }
 }
