@@ -2,17 +2,16 @@ const express = require('express');
 const cors = require('cors');
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
-const input = require('input'); // Nur falls nötig, sonst entfernen
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// DEINE DATEN HIER EINTRAGEN
-const apiId = 23049703; 
+const apiId = 23049703;
 const apiHash = 'e9c00af578a9de0253ef02337460498f';
+
 let client;
-let phoneCodeHash;
+let currentPhoneCodeHash;
 
 app.post('/send-otp', async (req, res) => {
     try {
@@ -21,12 +20,11 @@ app.post('/send-otp', async (req, res) => {
         await client.connect();
         
         const result = await client.sendCode({ apiId, apiHash }, phoneNumber);
-        phoneCodeHash = result.phoneCodeHash;
+        currentPhoneCodeHash = result.phoneCodeHash;
         
-        res.json({ success: true, phoneCodeHash });
-    } catch (error) {
-        console.error(error);
-        res.status(400).json({ error: error.message });
+        res.json({ success: true });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
     }
 });
 
@@ -34,23 +32,19 @@ app.post('/verify-otp', async (req, res) => {
     try {
         const { phoneNumber, code } = req.body;
         
+        // Korrekte Syntax für die neueste gramjs Version
         await client.signIn({
             apiId,
             apiHash,
             phoneNumber: phoneNumber,
-            phoneCodeHash: phoneCodeHash,
+            phoneCodeHash: currentPhoneCodeHash,
             phoneCode: code
         });
 
-        const sessionString = client.session.save();
-        console.log("Session String:", sessionString);
-        
-        res.json({ success: true, session: sessionString });
-    } catch (error) {
-        console.error(error);
-        res.status(400).json({ error: error.message });
+        res.json({ success: true, session: client.session.save() });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
     }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(process.env.PORT || 3000);
