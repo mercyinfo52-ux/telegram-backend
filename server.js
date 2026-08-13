@@ -2,57 +2,60 @@ const express = require('express');
 const cors = require('cors');
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
+const input = require('input'); // Falls du es brauchst, sonst entfernen
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json()); // WICHTIG: Damit JSON-Daten im Body gelesen werden können
 
-const apiId = 23049703;
-const apiHash = 'e9c00af578a9de0253ef02337460498f';
+// Globale Variable für den Client (nur für einen User-Flow gleichzeitig)
+let client = null;
 
-// Client-Instanz global halten
-const client = new TelegramClient(new StringSession(''), apiId, apiHash, { 
-    connectionRetries: 5 
-});
+app.post('/send-otp', async (req, res) => {
+    const { phoneNumber, apiId, apiHash } = req.body;
 
-let phoneCodeHash = '';
+    if (!phoneNumber || !apiId || !apiHash) {
+        return res.status(400).json({ error: "Fehlende Daten" });
+    }
 
-// Client Verbindung initialisieren
-(async () => {
-    await client.connect();
-    console.log("Verbunden mit Telegram.");
-})();
-
-app.post('/send-code', async (req, res) => {
     try {
-        const result = await client.sendCode({
-            apiId: apiId,
+        const session = new StringSession("");
+        client = new TelegramClient(session, parseInt(apiId), apiHash, { connectionRetries: 5 });
+        await client.connect();
+        
+        const phoneCodeHash = await client.sendCode({
+            apiId: parseInt(apiId),
             apiHash: apiHash,
-        }, req.body.phone);
-        
-        phoneCodeHash = result.phoneCodeHash;
-        res.json({ success: true });
+        }, phoneNumber);
+
+        res.json({ success: true, phoneCodeHash: phoneCodeHash.phoneCodeHash });
     } catch (err) {
+        console.error(err);
         res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/verify-code', async (req, res) => {
+app.post('/verify-otp', async (req, res) => {
+    const { code, phoneCodeHash, phoneNumber, apiId, apiHash } = req.body;
+
     try {
-        // Die korrekte Struktur für das signIn Objekt in gramjs:
-        // Wir übergeben das 'authKey' oder den 'phoneCode' direkt.
-        // Das 'result' von sendCode (phoneCodeHash) ist hier essentiell.
-        const user = await client.signIn({
-            phoneNumber: req.body.phone,
-            phoneCode: req.body.phoneCode,
-            phoneCodeHash: phoneCodeHash
+        await client.signIn({
+            apiId: parseInt(apiId),
+            apiHash: apiHash,
+            phoneNumber: phoneNumber,
+            phoneCodeHash: phoneCodeHash,
+        }, {
+            phoneNumber: phoneNumber,
+            phoneCode: code
         });
-        
-        const sessionString = client.session.save();
-        res.json({ success: true, session: sessionString });
+
+        const stringSession = client.session.save();
+        res.json({ success: true, session: stringSession });
     } catch (err) {
+        console.error(err);
         res.status(500).json({ error: err.message });
     }
 });
 
-app.listen(3000, () => console.log('Server läuft auf 3000.'));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server läuft auf Port ${PORT}`));
