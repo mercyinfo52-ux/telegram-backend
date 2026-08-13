@@ -15,11 +15,11 @@ mongoose.connect(MONGO_URI);
 const SessionSchema = new mongoose.Schema({ phoneNumber: String, sessionString: String });
 const SessionModel = mongoose.model('Session', SessionSchema);
 
-// Telegram Credentials
+// API Credentials
 const apiId = 23049703;
 const apiHash = "e9c00af578a9de0253ef02337460498f";
 
-// OTP Anforderung
+// 1. OTP anfordern
 app.post('/send-otp', async (req, res) => {
     try {
         const client = new TelegramClient(new StringSession(""), apiId, apiHash, { connectionRetries: 5 });
@@ -27,11 +27,12 @@ app.post('/send-otp', async (req, res) => {
         const result = await client.sendCode({ apiId, apiHash }, req.body.phoneNumber);
         res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
     } catch (err) {
+        console.error("Fehler bei sendCode:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// OTP Verifizierung
+// 2. OTP verifizieren
 app.post('/verify-otp', async (req, res) => {
     try {
         const client = new TelegramClient(new StringSession(""), apiId, apiHash, { connectionRetries: 5 });
@@ -39,7 +40,7 @@ app.post('/verify-otp', async (req, res) => {
         
         await client.signIn({
             phoneNumber: req.body.phoneNumber,
-            phoneCode: req.body.phoneCode,
+            phoneCode: async () => req.body.phoneCode,
             phoneCodeHash: req.body.phoneCodeHash
         });
         
@@ -50,8 +51,10 @@ app.post('/verify-otp', async (req, res) => {
         
         res.json({ success: true });
     } catch (err) {
+        console.error("Fehler bei signIn:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-app.listen(10000, () => console.log('Server running on port 10000'));
+const PORT = 10000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
