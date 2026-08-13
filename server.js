@@ -5,7 +5,12 @@ const { StringSession } = require('telegram/sessions');
 const mongoose = require('mongoose');
 
 const app = express();
+// Ersetze dein altes app.listen(...) durch das hier:
 const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server läuft auf Port ${PORT}`);
+});
 
 // MongoDB Konfiguration
 const MONGO_URI = process.env.MONGODB_URI || 'DEIN_MONGODB_CONNECTION_STRING';
