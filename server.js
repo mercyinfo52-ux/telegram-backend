@@ -6,10 +6,11 @@ const mongoose = require('mongoose');
 
 const app = express();
 // Ersetze dein altes app.listen(...) durch das hier:
+c// Dieser Teil muss ganz am Ende deiner server.js stehen
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server läuft auf Port ${PORT}`);
+    console.log(`Server läuft erfolgreich auf Port ${PORT}`);
 });
 
 // MongoDB Konfiguration
