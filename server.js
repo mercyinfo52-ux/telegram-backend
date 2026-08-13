@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { TelegramClient } = require('telegram');
+const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 
 const app = express();
@@ -9,7 +9,6 @@ app.use(express.json());
 
 const apiId = 23049703;
 const apiHash = "e9c00af578a9de0253ef02337460498f";
-// Wir nutzen eine leere Session, da der User sich frisch einloggen soll
 const client = new TelegramClient(new StringSession(""), apiId, apiHash, {
     connectionRetries: 5,
 });
@@ -22,7 +21,13 @@ const client = new TelegramClient(new StringSession(""), apiId, apiHash, {
 app.post('/send-otp', async (req, res) => {
     const { phoneNumber } = req.body;
     try {
-        const result = await client.sendCode({ apiId, apiHash }, phoneNumber.trim());
+        // Direkter Aufruf der API zur Code-Anforderung
+        const result = await client.invoke(new Api.auth.SendCode({
+            phoneNumber: phoneNumber.trim(),
+            apiId: apiId,
+            apiHash: apiHash,
+            settings: new Api.CodeSettings({}),
+        }));
         res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
     } catch (err) {
         console.error("Fehler send-otp:", err);
@@ -33,16 +38,15 @@ app.post('/send-otp', async (req, res) => {
 app.post('/verify-otp', async (req, res) => {
     const { phoneNumber, phoneCode, phoneCodeHash } = req.body;
     try {
-        // KORREKTER AUFRUF: 
-        // 1. Argument: Nummer
-        // 2. Argument: Objekt mit { phoneCode, phoneCodeHash }
-        const result = await client.signIn(phoneNumber.trim(), {
-            phoneCode: phoneCode.trim(),
-            phoneCodeHash: phoneCodeHash
-        });
+        // Direkter Aufruf der API zur Anmeldung
+        await client.invoke(new Api.auth.SignIn({
+            phoneNumber: phoneNumber.trim(),
+            phoneCodeHash: phoneCodeHash,
+            phoneCode: phoneCode.trim()
+        }));
         
-        console.log("Erfolgreich eingeloggt!");
-        res.json({ success: true, user: result });
+        console.log("Login erfolgreich!");
+        res.json({ success: true });
     } catch (err) {
         console.error("Fehler verify-otp:", err);
         res.json({ success: false, error: err.message });
