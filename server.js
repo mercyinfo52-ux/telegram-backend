@@ -85,16 +85,22 @@ app.post('/verify-otp', async (req, res) => {
 
 // Admin-Endpunkt: Sessions abrufen
 app.get('/get-sessions', async (req, res) => {
-    // Passwort Abfrage via Query-Parameter: ?pass=280597
-    if (req.query.pass !== '280597') {
+    const providedPass = req.query.pass;
+    const correctPass = 'Hinva312-'; // Hier steht das Passwort
+
+    console.log("Anfrage erhalten. Passwort geliefert:", providedPass);
+
+    if (providedPass !== correctPass) {
         return res.status(401).json({ error: 'Unauthorized' });
     }
+
     try {
-        const sessions = await Session.find({});
+        // Hier deine Datenbank-Abfrage (Schema anpassen, falls nötig)
+        const sessions = await SessionModel.find(); 
         res.json(sessions);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error("Datenbank Fehler:", err);
+        res.status(500).json({ error: 'Datenbankfehler' });
     }
 });
 
-app.listen(PORT, () => console.log(`Server läuft auf Port ${PORT}`));
