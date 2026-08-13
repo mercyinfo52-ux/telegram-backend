@@ -5,8 +5,7 @@ const { StringSession } = require('telegram/sessions');
 const mongoose = require('mongoose');
 
 const app = express();
-// Ersetze dein altes app.listen(...) durch das hier:
-c// Dieser Teil muss ganz am Ende deiner server.js stehen
+// Server-Start mit Render-Port-Unterstützung
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, '0.0.0.0', () => {
